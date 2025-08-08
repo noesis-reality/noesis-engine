@@ -1,3 +1,16 @@
+.DS_Store
+
+# Swift build artifacts
+/.build
+/Packages
+swift-implementation/.build/
+swift-implementation/Packages/
+xcuserdata/
+DerivedData/
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+
 build
 _skbuild
 tmp*
@@ -5,3 +18,23 @@ __pycache__
 *.egg*
 node_modules/
 *.log
+
+# Generated test files
+*_tokens.txt
+python_tokens.txt
+python_test_tokens.json
+
+# Build artifacts
+default.metallib
+build-metal/
+gpt_oss/metal/build/
+
+# Python runtime build artifacts (keep _build/ source code)
+_skbuild/
+*.pyc
+*.pyo
+dist/
+*.egg-info/
+venv/
+env/
+.pytest_cache/

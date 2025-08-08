@@ -1,0 +1,5 @@
+Name: harmony_ffi
+Description: Official OpenAI Harmony library for Swift
+Version: 0.0.3
+Cflags: -I${pcfiledir}
+Libs: -L${pcfiledir} -lopenai_harmony
