@@ -23,7 +23,7 @@ if [[ -n "$NOESIS_DEV_MODE" ]]; then
     if [[ -d "$TIKTOKEN_LOCAL" ]]; then
         echo "📦 Found local tiktoken-swift at $TIKTOKEN_LOCAL"
         cd "$TIKTOKEN_LOCAL"
-        cargo build --release --features c_api
+        cargo build --release --features c-api
         
         # Copy library and header to CTiktoken for linking
         mkdir -p "$SOURCES_DIR/CTiktoken"
