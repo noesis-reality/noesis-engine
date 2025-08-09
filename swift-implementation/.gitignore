@@ -1,0 +1,46 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+/*.xcodeproj
+xcuserdata/
+DerivedData/
+Package.resolved
+
+# Compiled binaries
+*.dylib
+*.so
+*.a
+*.lib
+*.dll
+
+# Metal compiled files
+*.metallib
+*.air
+
+# Model files (too large for git)
+*.bin
+gpt-oss-*/
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# Rust/Cargo artifacts from FFI libraries
+Sources/CHarmony/target/
+Sources/CTiktoken/target/
+Sources/CHarmony/*.h.gch
+Sources/CTiktoken/*.h.gch
+
+# Build artifacts
+*.o
+*.dSYM
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+
+# Test outputs
+test-output/
+*.log
