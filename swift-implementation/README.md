@@ -91,7 +91,9 @@ huggingface-cli download openai/gpt-oss-120b \
     --local-dir gpt-oss-120b/
 ```
 
-### Run the Chat CLI
+### Run the CLIs
+
+#### Interactive Chat (noesis-chat)
 
 ```bash
 # Set library paths for Rust FFI
@@ -110,8 +112,31 @@ export DYLD_LIBRARY_PATH=Sources/CHarmony:Sources/CTiktoken
     --verbose
 ```
 
-### Available CLI Options
+#### Text Generation (noesis-generate)
 
+```bash
+# Simple generation
+.build/release/noesis-generate gpt-oss-20b/metal/model.bin \
+    "Why did the chicken cross the road?" \
+    --max-tokens 50
+
+# With system prompt and JSON output
+.build/release/noesis-generate gpt-oss-20b/metal/model.bin \
+    "Explain quantum computing" \
+    --system "You are a physics professor" \
+    --format json \
+    --stats
+
+# Using Harmony format
+.build/release/noesis-generate gpt-oss-20b/metal/model.bin \
+    "Write a haiku about coding" \
+    --harmony \
+    --temperature 0.9
+```
+
+### Available Options
+
+#### noesis-chat
 - `--system` - Custom system prompt
 - `--temperature` - Sampling temperature (0.0-1.0, default: 0.7)
 - `--max-tokens` - Maximum tokens per response (default: 500)
@@ -119,6 +144,16 @@ export DYLD_LIBRARY_PATH=Sources/CHarmony:Sources/CTiktoken
 - `--channels` - Enable reasoning channels
 - `--stats` - Show generation statistics
 - `--verbose` - Verbose output
+
+#### noesis-generate
+- `--max-tokens` - Maximum tokens to generate (default: 100)
+- `--temperature` - Sampling temperature (default: 0.7)
+- `--top-p` - Nucleus sampling threshold (default: 0.9)
+- `--repetition-penalty` - Repetition penalty (default: 1.1)
+- `--system` - System prompt (optional)
+- `--format` - Output format: text, tokens, or json
+- `--harmony` - Use Harmony conversation format
+- `--stats` - Show generation statistics
 
 ## Requirements
 

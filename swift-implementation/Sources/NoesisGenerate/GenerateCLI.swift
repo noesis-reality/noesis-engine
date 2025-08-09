@@ -5,7 +5,8 @@ import NoesisTools
 @preconcurrency import Metal
 
 /// Command-line tool for text generation with GPT-OSS
-struct Generate: ParsableCommand {
+@available(macOS 10.15, *)
+struct Generate: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "noesis-generate",
         abstract: "Generate text using GPT-OSS models"
@@ -50,7 +51,7 @@ struct Generate: ParsableCommand {
         case json
     }
     
-    mutating func run() throws {
+    mutating func run() async throws {
         let config = GenerateConfig(
             modelPath: modelPath,
             prompt: prompt,
@@ -65,22 +66,7 @@ struct Generate: ParsableCommand {
             verbose: verbose
         )
         
-        let semaphore = DispatchSemaphore(value: 0)
-        var taskError: Error?
-        
-        Task.detached { @MainActor in
-            do {
-                try await Self.runGeneration(config: config)
-            } catch {
-                taskError = error
-            }
-            semaphore.signal()
-        }
-        
-        semaphore.wait()
-        if let error = taskError {
-            throw error
-        }
+        try await Self.runGeneration(config: config)
     }
     
     @MainActor
@@ -306,8 +292,9 @@ enum RuntimeError: LocalizedError {
 // MARK: - Main
 
 @main
+@available(macOS 10.15, *)
 struct GenerateCLI {
-    static func main() {
-        Generate.main()
+    static func main() async {
+        await Generate.main()
     }
 }
