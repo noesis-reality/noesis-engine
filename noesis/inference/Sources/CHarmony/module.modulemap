@@ -1,0 +1,4 @@
+module CHarmony {
+    header "harmony_ffi.h"
+    export *
+}
