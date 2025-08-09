@@ -16,6 +16,19 @@ This directory contains the Swift implementation of GPT-OSS, providing Metal-acc
 - **`Plugins/`** - Swift build plugins
   - `MetallibBuilder/` - Automated Metal shader compilation
 
+## Quick Start
+
+```bash
+# Test your setup
+./Scripts/test-noesis.sh
+
+# Download a model (40GB)
+huggingface-cli download openai/gpt-oss-20b --include "metal/*" --local-dir gpt-oss-20b/
+
+# Run chat
+./Scripts/run-chat.sh gpt-oss-20b/metal/model.bin
+```
+
 ## Setup & Building
 
 ### Option 1: User Mode (Automatic Dependencies)
@@ -62,16 +75,50 @@ your-workspace/
 
 ## Running
 
+### Download a Model
+
+First, download the GPT-OSS model weights from Hugging Face:
+
 ```bash
-# Interactive chat
-swift run noesis-chat
+# For GPT-OSS 20b (recommended for testing, ~40GB)
+huggingface-cli download openai/gpt-oss-20b \
+    --include "metal/*" \
+    --local-dir gpt-oss-20b/
 
-# Generate text  
-swift run noesis-generate
-
-# Export models
-swift run noesis-export
+# For GPT-OSS 120b (requires more memory, ~240GB)
+huggingface-cli download openai/gpt-oss-120b \
+    --include "metal/*" \
+    --local-dir gpt-oss-120b/
 ```
+
+### Run the Chat CLI
+
+```bash
+# Set library paths for Rust FFI
+export DYLD_LIBRARY_PATH=Sources/CHarmony:Sources/CTiktoken
+
+# Run interactive chat
+.build/debug/noesis-chat gpt-oss-20b/metal/model.bin
+
+# Or with release build for better performance
+.build/release/noesis-chat gpt-oss-20b/metal/model.bin
+
+# With options
+.build/release/noesis-chat gpt-oss-20b/metal/model.bin \
+    --temperature 0.8 \
+    --max-tokens 200 \
+    --verbose
+```
+
+### Available CLI Options
+
+- `--system` - Custom system prompt
+- `--temperature` - Sampling temperature (0.0-1.0, default: 0.7)
+- `--max-tokens` - Maximum tokens per response (default: 500)
+- `--reasoning` - Reasoning effort level (low/medium/high)
+- `--channels` - Enable reasoning channels
+- `--stats` - Show generation statistics
+- `--verbose` - Verbose output
 
 ## Requirements
 

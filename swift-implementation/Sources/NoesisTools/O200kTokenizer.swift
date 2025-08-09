@@ -144,11 +144,12 @@ public class O200kTokenizer {
         assistantPrefix: String? = nil
     ) -> [UInt32] {
         do {
-            return try harmonyEncoding.renderPrompt(
+            let intTokens = try harmonyEncoding.renderPrompt(
                 systemMessage: systemMessage,
                 userMessage: userMessage,
                 assistantPrefix: assistantPrefix
             )
+            return intTokens.map { UInt32($0) }
         } catch {
             print("Failed to create harmony prompt: \(error)")
             return []

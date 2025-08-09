@@ -5,7 +5,8 @@ import NoesisTools
 @preconcurrency import Metal
 
 /// Interactive chat with GPT-OSS models using Harmony format
-@MainActor
+@main
+@available(macOS 10.15, *)
 struct Chat: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "noesis-chat",
@@ -55,7 +56,44 @@ struct Chat: AsyncParsableCommand {
     }
     
     mutating func run() async throws {
-        let modelURL = URL(fileURLWithPath: modelPath)
+        // Create chat configuration
+        let chatConfig = ChatConfig(
+            modelPath: modelPath,
+            system: system,
+            temperature: temperature,
+            maxTokens: maxTokens,
+            date: date,
+            knowledgeCutoff: knowledgeCutoff,
+            reasoning: reasoning,
+            channels: channels,
+            stats: stats,
+            verbose: verbose
+        )
+        
+        // Run the chat directly with async/await
+        let chat = ChatRunner()
+        try await chat.runChat(config: chatConfig)
+    }
+}
+
+// Keep the rest of the file the same...
+struct ChatConfig {
+    let modelPath: String
+    let system: String
+    let temperature: Float
+    let maxTokens: Int
+    let date: String?
+    let knowledgeCutoff: String
+    let reasoning: Chat.ReasoningLevel
+    let channels: Bool
+    let stats: Bool
+    let verbose: Bool
+}
+
+@MainActor
+final class ChatRunner {
+    func runChat(config: ChatConfig) async throws {
+        let modelURL = URL(fileURLWithPath: config.modelPath)
         
         // Verify model exists
         guard FileManager.default.fileExists(atPath: modelURL.path) else {
@@ -72,7 +110,7 @@ struct Chat: AsyncParsableCommand {
         // Load model
         let model = try ModelLoader.loadModel(from: modelURL, device: device)
         
-        if verbose {
+        if config.verbose {
             print("✅ Model loaded:")
             print("  Vocabulary: \(model.config.vocabularySize)")
             print("  Blocks: \(model.config.numBlocks)")
@@ -85,22 +123,27 @@ struct Chat: AsyncParsableCommand {
         
         // Setup Harmony encoding
         let encoding = HarmonyEncoding.harmony_gpt_oss
+        let temperature = config.temperature
+        let maxTokens = config.maxTokens
+        let channels = config.channels
+        let verbose = config.verbose
+        let stats = config.stats
         
         // Conversation state
         var conversation = HarmonyConversation(messages: [])
         
         // Setup system message
-        let conversationDate = date ?? {
+        let conversationDate = config.date ?? {
             let formatter = DateFormatter()
             formatter.dateFormat = "yyyy-MM-dd"
             return formatter.string(from: Date())
         }()
         
         var systemContent = HarmonySystemContent.new()
-            .withModelIdentity(system)
-            .withReasoningEffort(reasoning.harmonyEffort)
+            .withModelIdentity(config.system)
+            .withReasoningEffort(config.reasoning.harmonyEffort)
             .withConversationStartDate(conversationDate)
-            .withKnowledgeCutoff(knowledgeCutoff)
+            .withKnowledgeCutoff(config.knowledgeCutoff)
         
         if channels {
             systemContent = systemContent.withRequiredChannels(["analysis", "commentary", "final"])
@@ -111,9 +154,9 @@ struct Chat: AsyncParsableCommand {
         )
         
         print("\n💬 Chat session started. Type 'exit' or 'quit' to end.\n")
-        print("System: \(system)")
+        print("System: \(config.system)")
         print("Date: \(conversationDate)")
-        print("Knowledge cutoff: \(knowledgeCutoff)")
+        print("Knowledge cutoff: \(config.knowledgeCutoff)")
         if channels {
             print("Channels: enabled (analysis, commentary, final)")
         }
@@ -135,7 +178,7 @@ struct Chat: AsyncParsableCommand {
             
             // Special commands
             if input.hasPrefix("/") {
-                handleCommand(input)
+                handleCommand(input, config: config)
                 continue
             }
             
@@ -156,7 +199,7 @@ struct Chat: AsyncParsableCommand {
                 nextTurnRole: .assistant
             )
             
-            if verbose {
+            if config.verbose {
                 print("[Prompt: \(promptTokens.count) tokens] ", terminator: "")
             }
             
@@ -168,11 +211,14 @@ struct Chat: AsyncParsableCommand {
             var responseText = ""
             var currentChannel: String? = nil
             
+            let capturedChannels = channels
+            let capturedVerbose = verbose
+            
             let generatedTokens = try pipeline.generateTokens(
-                prompt: promptTokens.map { UInt32($0) },
-                maxTokens: maxTokens,
-                sampler: GptossSampler(temperature: temperature)
-            ) { token in
+                    prompt: promptTokens.map { UInt32($0) },
+                    maxTokens: maxTokens,
+                    sampler: GptossSampler(temperature: temperature)
+                ) { token in
                 responseTokens.append(token)
                 
                 // Handle special tokens
@@ -188,7 +234,7 @@ struct Chat: AsyncParsableCommand {
                 }
                 
                 // Decode and display token
-                let decoded = encoding.tokenizer.decode([Int(token)])
+                let decoded = encoding.tokenizer.decode([token])
                 responseText += decoded
                 
                 // Handle channel display
@@ -196,13 +242,13 @@ struct Chat: AsyncParsableCommand {
                     if decoded.contains("\n") {
                         // End of channel name
                         currentChannel = nil
-                        if channels && verbose {
+                        if capturedChannels && capturedVerbose {
                             print("\n[\(channel)] ", terminator: "")
                         }
                     } else {
                         currentChannel! += decoded
                     }
-                } else if !channels || !responseText.contains("<|channel|>") {
+                } else if !capturedChannels || !responseText.contains("<|channel|>") {
                     // Only print if not in channel mode or no channels yet
                     print(decoded, terminator: "")
                     fflush(stdout)
@@ -229,7 +275,7 @@ struct Chat: AsyncParsableCommand {
         }
     }
     
-    private func handleCommand(_ command: String) {
+    private func handleCommand(_ command: String, config: ChatConfig) {
         switch command {
         case "/help":
             print("""
@@ -248,14 +294,14 @@ struct Chat: AsyncParsableCommand {
             
         case "/stats":
             // Note: Would need to make stats mutable
-            print("Statistics: \(stats ? "enabled" : "disabled")")
+            print("Statistics: \(config.stats ? "enabled" : "disabled")")
             
         case "/channels":
             // Note: Would need to make channels mutable
-            print("Channels: \(channels ? "enabled" : "disabled")")
+            print("Channels: \(config.channels ? "enabled" : "disabled")")
             
         case "/system":
-            print("System prompt: \(system)")
+            print("System prompt: \(config.system)")
             
         default:
             print("Unknown command. Type /help for available commands.")
@@ -287,11 +333,3 @@ enum RuntimeError: LocalizedError {
     }
 }
 
-// MARK: - Main
-
-@main
-struct ChatCLI {
-    static func main() {
-        Chat.main()
-    }
-}

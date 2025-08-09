@@ -52,9 +52,10 @@ struct RustDependencyBuilder: BuildToolPlugin {
         if FileManager.default.fileExists(atPath: tiktokenPath.string) {
             commands.append(.buildCommand(
                 displayName: "Build local tiktoken-swift",
-                executable: try context.tool(named: "cargo").path,
+                executable: Path("/bin/sh"),
                 arguments: [
-                    "build", "--release", "--features", "c_api"
+                    "-c",
+                    "cd '\(tiktokenPath.string)' && cargo build --release --features c_api"
                 ],
                 environment: [:],
                 inputFiles: [
@@ -63,8 +64,7 @@ struct RustDependencyBuilder: BuildToolPlugin {
                 ],
                 outputFiles: [
                     tiktokenPath.appending("target/release/libtiktoken.dylib")
-                ],
-                workingDirectory: tiktokenPath
+                ]
             ))
         } else {
             print("⚠️ Local tiktoken-swift not found at \(tiktokenPath.string)")
@@ -74,9 +74,10 @@ struct RustDependencyBuilder: BuildToolPlugin {
         if FileManager.default.fileExists(atPath: harmonyPath.string) {
             commands.append(.buildCommand(
                 displayName: "Build local harmony-swift",
-                executable: try context.tool(named: "cargo").path,
+                executable: Path("/bin/sh"),
                 arguments: [
-                    "build", "--release", "--features", "c-api"
+                    "-c",
+                    "cd '\(harmonyPath.string)' && cargo build --release --features c-api"
                 ],
                 environment: [:],
                 inputFiles: [
@@ -85,8 +86,7 @@ struct RustDependencyBuilder: BuildToolPlugin {
                 ],
                 outputFiles: [
                     harmonyPath.appending("target/release/libopenai_harmony.dylib")
-                ],
-                workingDirectory: harmonyPath
+                ]
             ))
         } else {
             print("⚠️ Local harmony-swift not found at \(harmonyPath.string)")
@@ -115,46 +115,42 @@ struct RustDependencyBuilder: BuildToolPlugin {
             arguments: ["-p", rustDepsDir.string],
             environment: [:],
             inputFiles: [],
-            outputFiles: [rustDepsDir],
-            workingDirectory: workingDirectory
+            outputFiles: [rustDepsDir]
         ))
         
         // Clone tiktoken-swift if not exists
         commands.append(.buildCommand(
             displayName: "Clone tiktoken-swift",
-            executable: Path("/usr/bin/git"),
+            executable: Path("/bin/sh"),
             arguments: [
-                "clone",
-                "https://github.com/noesis-reality/tiktoken-swift.git",
-                "tiktoken-swift"
+                "-c",
+                "cd '\(rustDepsDir.string)' && git clone https://github.com/noesis-reality/tiktoken-swift.git tiktoken-swift"
             ],
             environment: [:],
             inputFiles: [],
-            outputFiles: [tiktokenDir],
-            workingDirectory: rustDepsDir
+            outputFiles: [tiktokenDir]
         ))
         
         // Clone harmony-swift if not exists
         commands.append(.buildCommand(
             displayName: "Clone harmony-swift", 
-            executable: Path("/usr/bin/git"),
+            executable: Path("/bin/sh"),
             arguments: [
-                "clone",
-                "https://github.com/noesis-reality/harmony-swift.git",
-                "harmony-swift"
+                "-c",
+                "cd '\(rustDepsDir.string)' && git clone https://github.com/noesis-reality/harmony-swift.git harmony-swift"
             ],
             environment: [:],
             inputFiles: [],
-            outputFiles: [harmonyDir],
-            workingDirectory: rustDepsDir
+            outputFiles: [harmonyDir]
         ))
         
         // Build tiktoken-swift
         commands.append(.buildCommand(
             displayName: "Build tiktoken-swift",
-            executable: try context.tool(named: "cargo").path,
+            executable: Path("/bin/sh"),
             arguments: [
-                "build", "--release", "--features", "c_api"
+                "-c",
+                "cd '\(tiktokenDir.string)' && cargo build --release --features c_api"
             ],
             environment: [:],
             inputFiles: [
@@ -163,16 +159,16 @@ struct RustDependencyBuilder: BuildToolPlugin {
             ],
             outputFiles: [
                 tiktokenDir.appending("target/release/libtiktoken.dylib")
-            ],
-            workingDirectory: tiktokenDir
+            ]
         ))
         
         // Build harmony-swift
         commands.append(.buildCommand(
             displayName: "Build harmony-swift",
-            executable: try context.tool(named: "cargo").path,
+            executable: Path("/bin/sh"),
             arguments: [
-                "build", "--release", "--features", "c-api"
+                "-c",
+                "cd '\(harmonyDir.string)' && cargo build --release --features c-api"
             ],
             environment: [:],
             inputFiles: [
@@ -181,8 +177,7 @@ struct RustDependencyBuilder: BuildToolPlugin {
             ],
             outputFiles: [
                 harmonyDir.appending("target/release/libopenai_harmony.dylib")
-            ],
-            workingDirectory: harmonyDir
+            ]
         ))
         
         // Copy built libraries to expected locations
@@ -207,8 +202,7 @@ struct RustDependencyBuilder: BuildToolPlugin {
             outputFiles: [
                 libsOutputDir.appending("libtiktoken.dylib"),
                 libsOutputDir.appending("libopenai_harmony.dylib")
-            ],
-            workingDirectory: workingDirectory
+            ]
         ))
         
         return commands
