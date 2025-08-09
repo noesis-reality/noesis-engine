@@ -84,7 +84,11 @@ public class TokenizerDataLoader {
         
         for token in orderedTokens {
             if let uuid = specialTokenUUIDs[token] {
-                specialUUIDs.append(uuid.data)
+                var uuidBytes = Data(count: 16)
+                withUnsafeBytes(of: uuid.uuid) { bytes in
+                    uuidBytes = Data(bytes)
+                }
+                specialUUIDs.append(uuidBytes)
             } else {
                 // Zero UUID for unspecified/reversed tokens
                 specialUUIDs.append(Data(repeating: 0, count: 16))
@@ -109,4 +113,4 @@ public class TokenizerDataLoader {
     }
 }
 
-// UUID extension moved to ModelExporter.swift to avoid duplication
+// UUID extensions are now handled by the system

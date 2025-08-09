@@ -19,14 +19,15 @@ This directory contains the Swift implementation of GPT-OSS, providing Metal-acc
 ## Quick Start
 
 ```bash
-# Test your setup
-./Scripts/test-noesis.sh
+# One-command setup (downloads model and configures everything)
+./setup.sh
 
-# Download a model (40GB)
-huggingface-cli download openai/gpt-oss-20b --include "metal/*" --local-dir gpt-oss-20b/
+# Or setup without downloading model (faster)
+./setup.sh --skip-model
 
-# Run chat
-./Scripts/run-chat.sh gpt-oss-20b/metal/model.bin
+# Then just run!
+.build/release/noesis-chat        # Uses default model from config
+.build/release/noesis-generate "Tell me a joke"
 ```
 
 ## Setup & Building
@@ -69,9 +70,12 @@ Developer mode expects the repository structure:
 ```
 your-workspace/
 ├── noesis-engine/swift-implementation/  # This project
-├── tiktoken-swift/                      # Your local tiktoken fork
-└── harmony-swift/                       # Your local harmony fork
+└── harmony-swift/                       # Your local harmony fork (includes tiktoken)
 ```
+
+**Note on Tokenization:** The Swift implementation uses `harmony-swift` which has tiktoken embedded.
+This matches the Python reference implementation which uses `openai_harmony` for conversation 
+formatting. We do not need a separate tiktoken-swift library.
 
 ## Running
 
@@ -96,17 +100,14 @@ huggingface-cli download openai/gpt-oss-120b \
 #### Interactive Chat (noesis-chat)
 
 ```bash
-# Set library paths for Rust FFI
-export DYLD_LIBRARY_PATH=Sources/CHarmony:Sources/CTiktoken
+# Run with default model from config
+.build/release/noesis-chat
 
-# Run interactive chat
-.build/debug/noesis-chat gpt-oss-20b/metal/model.bin
-
-# Or with release build for better performance
+# Or specify a model explicitly
 .build/release/noesis-chat gpt-oss-20b/metal/model.bin
 
 # With options
-.build/release/noesis-chat gpt-oss-20b/metal/model.bin \
+.build/release/noesis-chat \
     --temperature 0.8 \
     --max-tokens 200 \
     --verbose
@@ -115,21 +116,18 @@ export DYLD_LIBRARY_PATH=Sources/CHarmony:Sources/CTiktoken
 #### Text Generation (noesis-generate)
 
 ```bash
-# Simple generation
-.build/release/noesis-generate gpt-oss-20b/metal/model.bin \
-    "Why did the chicken cross the road?" \
-    --max-tokens 50
+# Simple generation (uses default model from config)
+.build/release/noesis-generate "Why did the chicken cross the road?"
 
 # With system prompt and JSON output
-.build/release/noesis-generate gpt-oss-20b/metal/model.bin \
-    "Explain quantum computing" \
+.build/release/noesis-generate "Explain quantum computing" \
     --system "You are a physics professor" \
     --format json \
     --stats
 
-# Using Harmony format
-.build/release/noesis-generate gpt-oss-20b/metal/model.bin \
-    "Write a haiku about coding" \
+# Using Harmony format with specific model
+.build/release/noesis-generate "Write a haiku about coding" \
+    --model-path gpt-oss-120b/metal/model.bin \
     --harmony \
     --temperature 0.9
 ```

@@ -1,8 +1,6 @@
 import Foundation
-import Harmony
-import CTiktoken
 
-/// O200k_gptoss tokenizer using HarmonyFFI
+/// O200k_gptoss tokenizer using tiktoken directly
 public class O200kTokenizer {
     
     /// Special tokens for GPT-OSS
@@ -48,20 +46,19 @@ public class O200kTokenizer {
         }
     }
     
-    private let harmonyEncoding: HarmonyEncoding
-    private let tiktokenBPE: OpaquePointer?
+    private let harmonyWrapper: HarmonyWrapper
     private let specialTokenMap: [String: UInt32]
     private let reverseSpecialTokenMap: [UInt32: String]
     
     public init() throws {
-        // Initialize HarmonyFFI encoding for conversation formatting
-        self.harmonyEncoding = try HarmonyEncoding()
-        
-        // Initialize tiktoken CoreBPE for base tokenization
-        self.tiktokenBPE = tiktoken_get_o200k_base()
-        if self.tiktokenBPE == nil {
-            throw TokenizerError.initializationFailed("Failed to initialize tiktoken o200k_base")
+        print("   🔄 Initializing Harmony wrapper (with embedded tiktoken)...")
+        // Initialize harmony wrapper for both tokenization and conversation formatting
+        do {
+            self.harmonyWrapper = try HarmonyWrapper()
+        } catch {
+            fatalError("CRITICAL: Failed to initialize harmony wrapper - this is required for tokenization and GPT-OSS formatting: \(error)")
         }
+        print("   ✅ Harmony wrapper initialized")
         
         // Build special token maps
         var specialMap: [String: UInt32] = [:]
@@ -77,9 +74,8 @@ public class O200kTokenizer {
     }
     
     deinit {
-        if let bpe = tiktokenBPE {
-            tiktoken_free_core_bpe(bpe)
-        }
+        // HarmonyWrapper handles its own cleanup in its deinit
+        // tiktoken is now handled by harmony internally
     }
     
     enum TokenizerError: Error {
@@ -88,43 +84,16 @@ public class O200kTokenizer {
         case decodingFailed(String)
     }
     
-    /// Encode text to token IDs using tiktoken for base tokenization
+    /// Encode text to token IDs using harmony's embedded tiktoken
     public func encode(_ text: String, allowedSpecial: String = "all") -> [UInt32] {
-        guard let bpe = tiktokenBPE else { return [] }
-        
-        var tokensPtr: UnsafeMutablePointer<UInt32>?
-        var tokensLen: size_t = 0
-        
-        let result = tiktoken_encode_ordinary(bpe, text, &tokensPtr, &tokensLen)
-        
-        guard result.success else {
-            if let errorMsg = result.error_message {
-                print("Tiktoken encoding error: \(String(cString: errorMsg))")
-                tiktoken_free_string(errorMsg)
-            }
-            return []
-        }
-        
-        guard let tokens = tokensPtr, tokensLen > 0 else { return [] }
-        
-        let tokenArray = Array(UnsafeBufferPointer(start: tokens, count: tokensLen))
-        tiktoken_free_tokens(tokensPtr, tokensLen)
-        
-        return tokenArray
+        // Use harmony's encodePlain method which has tiktoken embedded
+        let intTokens = harmonyWrapper.encodePlain(text)
+        return intTokens.map { UInt32($0) }
     }
     
-    /// Decode token IDs to text using tiktoken
+    /// Decode token IDs to text using harmony's decoder
     public func decode(_ tokens: [UInt32]) -> String {
-        guard let bpe = tiktokenBPE else { return "" }
-        
-        let result = tiktoken_decode(bpe, tokens, tokens.count)
-        
-        guard let cString = result else { return "" }
-        
-        let decoded = String(cString: cString)
-        tiktoken_free_string(cString)
-        
-        return decoded
+        return harmonyWrapper.decode(tokens)
     }
     
     /// Check if a token ID is a special token
@@ -143,17 +112,15 @@ public class O200kTokenizer {
         userMessage: String,
         assistantPrefix: String? = nil
     ) -> [UInt32] {
-        do {
-            let intTokens = try harmonyEncoding.renderPrompt(
-                systemMessage: systemMessage,
-                userMessage: userMessage,
-                assistantPrefix: assistantPrefix
-            )
-            return intTokens.map { UInt32($0) }
-        } catch {
-            print("Failed to create harmony prompt: \(error)")
-            return []
-        }
+        // Use HarmonyWrapper's renderPrompt method
+        let intTokens = harmonyWrapper.renderPrompt(
+            systemMessage: systemMessage,
+            userMessage: userMessage,
+            assistantPrefix: assistantPrefix
+        )
+        
+        // Convert Int tokens to UInt32
+        return intTokens.map { UInt32($0) }
     }
     
     /// Vocabulary size
@@ -183,15 +150,21 @@ public class O200kTokenizer {
     
     /// Get stop tokens for generation
     public func stopTokens() -> Set<UInt32> {
-        // Get stop tokens from HarmonyFFI
+        // Get stop tokens from HarmonyWrapper
         do {
-            let tokens = try harmonyEncoding.stopTokens()
+            var tokens = try harmonyWrapper.stopTokens()
+            // Always include <|endoftext|> as it's the primary EOS token
+            // Harmony might not include it but we must always stop on it
+            tokens.append(SpecialToken.endOfText.tokenId)  // 199999
             return Set(tokens)
         } catch {
+            print("Warning: Failed to get stop tokens from harmony: \(error)")
             // Fallback to default stop tokens
             return Set([
                 SpecialToken.endOfText.tokenId,  // Always stop on EOS
                 SpecialToken.end.tokenId,        // Stop on message end
+                SpecialToken.return.tokenId,     // Stop on return
+                SpecialToken.call.tokenId        // Stop on call
             ])
         }
     }
@@ -230,7 +203,11 @@ public class TokenizerBuilder {
         // Add UUIDs for special tokens in order
         for token in O200kTokenizer.SpecialToken.allCases {
             if let uuid = specialTokenUUIDs[token.rawValue] {
-                specialUUIDs.append(uuid.data)
+                var uuidBytes = Data(count: 16)
+                withUnsafeBytes(of: uuid.uuid) { bytes in
+                    uuidBytes = Data(bytes)
+                }
+                specialUUIDs.append(uuidBytes)
             } else {
                 // Zero UUID for unspecified/reversed tokens
                 specialUUIDs.append(Data(repeating: 0, count: 16))

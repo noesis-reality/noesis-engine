@@ -1,0 +1,18 @@
+[package]
+name = "harmony-jni"
+version = "0.1.0"
+edition = "2021"
+authors = ["Noesis Reality AI, Inc."]
+
+[lib]
+name = "openai_harmony"
+crate-type = ["cdylib"]
+
+[dependencies]
+jni = "0.21"
+harmony-swift = { path = "../swift-implementation/Sources/CHarmony/harmony_ffi" }
+# Note: This path would need to be adjusted to point to the actual Rust Harmony crate
+# For now, we'll create a wrapper that uses the existing FFI
+
+[build-dependencies]
+cbindgen = "0.26"

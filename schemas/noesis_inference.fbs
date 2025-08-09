@@ -1,0 +1,145 @@
+// Noesis GPT-OSS Inference Protocol - FlatBuffers Schema
+// Optimized for real-time streaming inference with Kotlin coroutines
+// Copyright (c) 2025 Noesis Reality LLC
+
+namespace noesis.protocol;
+
+// Core data types
+enum ReasoningLevel : byte { 
+    LOW = 0, 
+    MEDIUM = 1, 
+    HIGH = 2 
+}
+
+enum StreamingMode : byte {
+    DISABLED = 0,
+    TOKENS = 1,
+    REASONING_STEPS = 2,
+    FULL_CONTEXT = 3
+}
+
+enum MessageType : byte {
+    INFERENCE_REQUEST = 0,
+    INFERENCE_RESPONSE = 1,
+    TOKEN_STREAM = 2,
+    REASONING_STREAM = 3,
+    ERROR_RESPONSE = 4,
+    CONTROL_MESSAGE = 5
+}
+
+// Inference request from Kotlin to Swift
+table InferenceRequest {
+    id: string;                          // Request correlation ID
+    prompt: string;                      // Input prompt (Harmony-encoded)
+    system_prompt: string;               // Optional system context
+    
+    // Generation parameters
+    max_tokens: uint32 = 100;
+    temperature: float = 0.7;
+    top_p: float = 0.9;
+    repetition_penalty: float = 1.1;
+    reasoning_effort: ReasoningLevel = MEDIUM;
+    seed: uint32;
+    
+    // Streaming configuration  
+    streaming_mode: StreamingMode = DISABLED;
+    streaming_batch_size: uint32 = 1;    // Tokens per streaming batch
+    
+    // Performance hints
+    priority: byte = 0;                  // 0=normal, 1=high, 2=realtime
+    timeout_ms: uint32 = 30000;
+}
+
+// Complete inference response (non-streaming)
+table InferenceResponse {
+    id: string;                          // Correlates to request ID
+    text: string;                        // Generated text
+    tokens: [uint32];                    // Token IDs
+    
+    // Performance metrics
+    tokens_generated: uint32;
+    time_ms: uint64;
+    tokens_per_second: double;
+    gpu_memory_mb: uint32;
+    
+    // Harmony-specific data
+    harmony_format: string;              // Structured reasoning output
+    reasoning_steps: [ReasoningStep];
+    
+    error: string;                       // Error message if failed
+}
+
+// Streaming token batch (real-time)
+table TokenStream {
+    id: string;                          // Correlates to request ID
+    sequence_id: uint32;                 // Stream sequence number
+    tokens: [uint32];                    // Token batch
+    text_delta: string;                  // Decoded text for this batch
+    
+    // Stream control
+    is_final: bool = false;              // Last batch in stream
+    should_continue: bool = true;        // Backpressure signal
+    
+    // Real-time metrics
+    batch_time_ms: uint32;
+    cumulative_tokens: uint32;
+    instantaneous_speed: double;
+}
+
+// Structured reasoning step (for Harmony)
+table ReasoningStep {
+    step_number: uint32;
+    thought: string;
+    analysis: string;
+    conclusion: string;
+    confidence: float;
+    timestamp_ms: uint64;
+}
+
+// Reasoning stream for structured thinking
+table ReasoningStream {
+    id: string;                          // Correlates to request ID  
+    sequence_id: uint32;
+    reasoning_step: ReasoningStep;
+    
+    // Context information
+    context_tokens: [uint32];
+    context_summary: string;
+    
+    is_final: bool = false;
+}
+
+// Error response
+table ErrorResponse {
+    id: string;                          // Correlates to request ID
+    error_code: uint32;
+    error_message: string;
+    error_details: string;
+    
+    // Debugging info
+    stack_trace: string;
+    native_layer: string;                // "swift" or "rust"
+}
+
+// Control messages for flow control
+table ControlMessage {
+    id: string;                          // Correlates to request ID
+    command: string;                     // "pause", "resume", "cancel"
+    parameters: string;                  // JSON for flexibility
+}
+
+// Root message wrapper
+table NoesisMessage {
+    message_type: MessageType;
+    timestamp_ms: uint64;
+    
+    // Union of all possible message types
+    inference_request: InferenceRequest;
+    inference_response: InferenceResponse;
+    token_stream: TokenStream;
+    reasoning_stream: ReasoningStream;
+    error_response: ErrorResponse;
+    control_message: ControlMessage;
+}
+
+root_type NoesisMessage;

@@ -29,7 +29,7 @@ fi
 # Check libraries
 echo ""
 echo "2. Checking FFI libraries..."
-if [ -f "Sources/CHarmony/libopenai_harmony.dylib" ] && [ -f "Sources/CTiktoken/libtiktoken.dylib" ]; then
+if [ -f "Sources/CHarmony/libopenai_harmony.dylib" ]; then
     echo -e "${GREEN}✅ FFI libraries found${NC}"
 else
     echo -e "${YELLOW}⚠️  FFI libraries missing. Running setup...${NC}"
@@ -80,10 +80,10 @@ echo ""
 
 if [ "$MODEL_FOUND" = true ]; then
     echo "Ready to run chat! Use:"
-    echo "  export DYLD_LIBRARY_PATH=Sources/CHarmony:Sources/CTiktoken"
+    echo "  export DYLD_LIBRARY_PATH=Sources/CHarmony"
     echo "  .build/debug/noesis-chat <model-path>"
 else
     echo "Download a model first, then run:"
-    echo "  export DYLD_LIBRARY_PATH=Sources/CHarmony:Sources/CTiktoken"
+    echo "  export DYLD_LIBRARY_PATH=Sources/CHarmony"
     echo "  .build/debug/noesis-chat <model-path>"
 fi

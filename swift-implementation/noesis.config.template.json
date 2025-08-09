@@ -1,0 +1,17 @@
+{
+  "debug": {
+    "verbose": false,
+    "showModelPaths": false,
+    "logTokenization": false
+  },
+  "generation": {
+    "defaultTemperature": 0.7,
+    "defaultMaxTokens": 500,
+    "defaultTopP": 0.9
+  },
+  "chat": {
+    "systemPrompt": "You are a helpful AI assistant.",
+    "reasoningLevel": "medium",
+    "showStats": false
+  }
+}

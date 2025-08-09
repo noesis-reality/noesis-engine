@@ -1,4 +1,5 @@
 import Foundation
+import CHarmony
 
 // MARK: - Harmony C FFI Wrapper
 
@@ -28,23 +29,76 @@ public final class HarmonyWrapper {
         guard let encoding = harmonyEncoding else { return [] }
         
         var tokensOut: UnsafeMutablePointer<UInt32>?
-        var tokensLen: Int = 0
+        var tokensLen: size_t = 0
         
-        let result = harmony_encoding_render_prompt(
-            encoding,
-            systemMessage,
-            userMessage,
-            assistantPrefix,
-            &tokensOut,
-            &tokensLen
-        )
+        let result: HarmonyResult
+        if let systemMessage = systemMessage {
+            result = systemMessage.withCString { systemCStr in
+                userMessage.withCString { userCStr in
+                    if let assistantPrefix = assistantPrefix {
+                        return assistantPrefix.withCString { prefixCStr in
+                            harmony_encoding_render_prompt(
+                                encoding,
+                                systemCStr,
+                                userCStr,
+                                prefixCStr,
+                                &tokensOut,
+                                &tokensLen
+                            )
+                        }
+                    } else {
+                        return harmony_encoding_render_prompt(
+                            encoding,
+                            systemCStr,
+                            userCStr,
+                            nil,
+                            &tokensOut,
+                            &tokensLen
+                        )
+                    }
+                }
+            }
+        } else {
+            result = userMessage.withCString { userCStr in
+                if let assistantPrefix = assistantPrefix {
+                    return assistantPrefix.withCString { prefixCStr in
+                        harmony_encoding_render_prompt(
+                            encoding,
+                            nil,
+                            userCStr,
+                            prefixCStr,
+                            &tokensOut,
+                            &tokensLen
+                        )
+                    }
+                } else {
+                    return harmony_encoding_render_prompt(
+                        encoding,
+                        nil,
+                        userCStr,
+                        nil,
+                        &tokensOut,
+                        &tokensLen
+                    )
+                }
+            }
+        }
         
-        guard result == HARMONY_SUCCESS, let tokens = tokensOut else {
+        guard result.success else {
+            if let errorMsg = result.error_message {
+                let error = String(cString: errorMsg)
+                harmony_free_string(errorMsg)
+                print("Harmony render prompt error: \(error)")
+            }
+            return []
+        }
+        
+        guard let tokens = tokensOut, tokensLen > 0 else {
             return []
         }
         
         defer {
-            harmony_free_tokens(tokens)
+            harmony_free_tokens(tokens, tokensLen)
         }
         
         // Convert UInt32 tokens to Int for compatibility
@@ -61,21 +115,32 @@ public final class HarmonyWrapper {
         guard let encoding = harmonyEncoding else { return [] }
         
         var tokensOut: UnsafeMutablePointer<UInt32>?
-        var tokensLen: Int = 0
+        var tokensLen: size_t = 0
         
-        let result = harmony_encoding_encode_plain(
-            encoding,
-            text,
-            &tokensOut,
-            &tokensLen
-        )
+        let result = text.withCString { textCStr in
+            harmony_encoding_encode_plain(
+                encoding,
+                textCStr,
+                &tokensOut,
+                &tokensLen
+            )
+        }
         
-        guard result == HARMONY_SUCCESS, let tokens = tokensOut else {
+        guard result.success else {
+            if let errorMsg = result.error_message {
+                let error = String(cString: errorMsg)
+                harmony_free_string(errorMsg)
+                print("Harmony encode plain error: \(error)")
+            }
+            return []
+        }
+        
+        guard let tokens = tokensOut, tokensLen > 0 else {
             return []
         }
         
         defer {
-            harmony_free_tokens(tokens)
+            harmony_free_tokens(tokens, tokensLen)
         }
         
         // Convert UInt32 tokens to Int for compatibility
@@ -87,15 +152,57 @@ public final class HarmonyWrapper {
         return intTokens
     }
     
+    /// Decode tokens to text
+    public func decode(_ tokens: [UInt32]) -> String {
+        guard let encoding = harmonyEncoding else { return "" }
+        
+        let cString = tokens.withUnsafeBufferPointer { buffer in
+            harmony_encoding_decode(encoding, buffer.baseAddress, tokens.count)
+        }
+        
+        guard let result = cString else { return "" }
+        
+        let decoded = String(cString: result)
+        harmony_free_string(result)
+        
+        return decoded
+    }
+    
     /// Get stop tokens for generation
     public func stopTokens() throws -> [UInt32] {
-        // Common stop tokens for o200k_harmony encoding
-        return [
-            200002,  // <|return|>
-            200007,  // <|end|>
-            200012,  // <|call|>
-            199999   // <|endoftext|>
-        ]
+        guard let encoding = harmonyEncoding else {
+            throw HarmonyError.initializationFailed("Harmony encoding not initialized")
+        }
+        
+        var tokensOut: UnsafeMutablePointer<UInt32>?
+        var tokensLen: size_t = 0
+        
+        let result = harmony_encoding_stop_tokens(encoding, &tokensOut, &tokensLen)
+        
+        guard result.success else {
+            if let errorMsg = result.error_message {
+                let error = String(cString: errorMsg)
+                harmony_free_string(errorMsg)
+                throw HarmonyError.encodingFailed("Failed to get stop tokens: \(error)")
+            }
+            throw HarmonyError.encodingFailed("Failed to get stop tokens")
+        }
+        
+        guard let tokens = tokensOut, tokensLen > 0 else {
+            return []
+        }
+        
+        defer {
+            harmony_free_tokens(tokens, tokensLen)
+        }
+        
+        // Convert to array
+        var stopTokens: [UInt32] = []
+        for i in 0..<tokensLen {
+            stopTokens.append(tokens[i])
+        }
+        
+        return stopTokens
     }
 }
 
@@ -107,37 +214,3 @@ public enum HarmonyError: Error {
     case decodingFailed(String)
 }
 
-// MARK: - C FFI Declarations
-
-// These would normally be imported from the harmony-swift C header
-// For now, declaring them inline to match the expected interface
-
-private let HARMONY_SUCCESS: Int32 = 0
-private let HARMONY_ERROR: Int32 = 1
-
-@_silgen_name("harmony_encoding_new")
-private func harmony_encoding_new() -> OpaquePointer?
-
-@_silgen_name("harmony_encoding_free")
-private func harmony_encoding_free(_ encoding: OpaquePointer)
-
-@_silgen_name("harmony_encoding_render_prompt")
-private func harmony_encoding_render_prompt(
-    _ encoding: OpaquePointer,
-    _ systemMsg: UnsafePointer<CChar>?,
-    _ userMsg: UnsafePointer<CChar>?,
-    _ assistantPrefix: UnsafePointer<CChar>?,
-    _ tokensOut: UnsafeMutablePointer<UnsafeMutablePointer<UInt32>?>,
-    _ tokensLen: UnsafeMutablePointer<Int>
-) -> Int32
-
-@_silgen_name("harmony_encoding_encode_plain")
-private func harmony_encoding_encode_plain(
-    _ encoding: OpaquePointer,
-    _ text: UnsafePointer<CChar>?,
-    _ tokensOut: UnsafeMutablePointer<UnsafeMutablePointer<UInt32>?>,
-    _ tokensLen: UnsafeMutablePointer<Int>
-) -> Int32
-
-@_silgen_name("harmony_free_tokens")
-private func harmony_free_tokens(_ tokens: UnsafeMutablePointer<UInt32>)

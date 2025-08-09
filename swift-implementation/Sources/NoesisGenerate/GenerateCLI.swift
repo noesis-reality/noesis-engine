@@ -5,6 +5,7 @@ import NoesisTools
 @preconcurrency import Metal
 
 /// Command-line tool for text generation with GPT-OSS
+@main
 @available(macOS 10.15, *)
 struct Generate: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -12,11 +13,11 @@ struct Generate: AsyncParsableCommand {
         abstract: "Generate text using GPT-OSS models"
     )
     
-    @Argument(help: "Path to model.bin file")
-    var modelPath: String
-    
     @Argument(help: "Input prompt text")
     var prompt: String
+    
+    @Option(help: "Path to model.bin file (uses config default if not specified)")
+    var modelPath: String?
     
     @Option(name: .shortAndLong, help: "Maximum tokens to generate")
     var maxTokens: Int = 100
@@ -36,9 +37,6 @@ struct Generate: AsyncParsableCommand {
     @Option(name: .long, help: "Output format (text, tokens, json)")
     var format: OutputFormat = .text
     
-    @Flag(name: .long, help: "Use Harmony format for conversation")
-    var harmony = false
-    
     @Flag(name: .long, help: "Show generation statistics")
     var stats = false
     
@@ -52,16 +50,28 @@ struct Generate: AsyncParsableCommand {
     }
     
     mutating func run() async throws {
+        // Load configuration
+        let configFile = ConfigLoader.load()
+        
+        // Resolve model path
+        guard let resolvedModelPath = ConfigLoader.resolveModelPath(modelPath) else {
+            throw ValidationError.fileNotFound("No model path specified and no default model in config. Use --model-path or set up config.")
+        }
+        
+        // Use config defaults if values weren't explicitly set
+        let finalTemperature = temperature != 0.7 ? temperature : (configFile?.generation.defaultTemperature ?? temperature)
+        let finalMaxTokens = maxTokens != 100 ? maxTokens : (configFile?.generation.defaultMaxTokens ?? maxTokens)
+        let finalTopP = topP != 0.9 ? topP : (configFile?.generation.defaultTopP ?? topP)
+        
         let config = GenerateConfig(
-            modelPath: modelPath,
+            modelPath: resolvedModelPath,
             prompt: prompt,
-            maxTokens: maxTokens,
-            temperature: temperature,
-            topP: topP,
+            maxTokens: finalMaxTokens,
+            temperature: finalTemperature,
+            topP: finalTopP,
             repetitionPenalty: repetitionPenalty,
             system: system,
             format: format,
-            harmony: harmony,
             stats: stats,
             verbose: verbose
         )
@@ -79,7 +89,6 @@ struct Generate: AsyncParsableCommand {
         // let repetitionPenalty = config.repetitionPenalty // Not used in GptossSampler
         let system = config.system
         let format = config.format
-        let harmony = config.harmony
         let stats = config.stats
         let verbose = config.verbose
         let modelURL = URL(fileURLWithPath: modelPath)
@@ -101,6 +110,8 @@ struct Generate: AsyncParsableCommand {
         // Load model
         let model = try ModelLoader.loadModel(from: modelURL, device: device)
         
+        print("🎯 Model loaded successfully")
+        
         if verbose {
             print("Model loaded:")
             print("  Vocabulary: \(model.config.vocabularySize)")
@@ -108,34 +119,37 @@ struct Generate: AsyncParsableCommand {
             print("  Embedding dim: \(model.config.embeddingDim)")
         }
         
+        print("🔧 Creating context...")
         // Create context
         let context = GptossContext(model: model, contextLength: 4096)
         
-        // Prepare prompt
+        print("📝 Initializing tokenizer...")
+        // Prepare prompt with Harmony format (required for GPT-OSS)
         let tokenizer = try O200kTokenizer()
-        var promptTokens: [UInt32]
         
-        if harmony {
-            // Use Harmony format
-            promptTokens = tokenizer.createHarmonyPrompt(
-                systemMessage: system,
-                userMessage: prompt
-            )
-            
-            if verbose {
-                print("Created Harmony prompt with \(promptTokens.count) tokens")
-            }
-        } else {
-            // Simple text prompt
-            var fullPrompt = prompt
-            if let systemPrompt = system {
-                fullPrompt = systemPrompt + "\n\n" + prompt
-            }
-            promptTokens = tokenizer.encode(fullPrompt)
-            
-            if verbose {
-                print("Encoded prompt to \(promptTokens.count) tokens")
-            }
+        // Use Python Metal example's system prompt if not specified
+        let defaultSystemPrompt = """
+        You are ChatGPT, a large language model trained by OpenAI.
+        Knowledge cutoff: 2024-06
+        Current date: \(Date().formatted(date: .abbreviated, time: .omitted))
+        
+        reasoning effort high
+        
+        # Valid channels: analysis, final. Channel must be included for every message.
+        """
+        
+        // Always use Harmony format for GPT-OSS
+        let promptTokens = tokenizer.createHarmonyPrompt(
+            systemMessage: system ?? defaultSystemPrompt,
+            userMessage: prompt
+        )
+        
+        if verbose {
+            print("Created Harmony prompt with \(promptTokens.count) tokens")
+            print("First 10 tokens: \(Array(promptTokens.prefix(10)))")
+            // Decode to see what the prompt looks like
+            let promptText = tokenizer.decode(Array(promptTokens.prefix(100)))
+            print("Prompt preview: \(promptText.prefix(200))...")
         }
         
         // Create sampler
@@ -154,8 +168,14 @@ struct Generate: AsyncParsableCommand {
             print("\nGenerating...")
         }
         
+        // Get stop tokens from tokenizer (uses Harmony's proper stop tokens)
+        let stopTokenSet = tokenizer.stopTokens()
+        
+        if verbose {
+            print("Stop tokens from Harmony: \(stopTokenSet)")
+        }
+        
         // Capture values before closure
-        let useHarmony = harmony
         let outputFormat = format
         let showStats = stats
         
@@ -166,15 +186,8 @@ struct Generate: AsyncParsableCommand {
         ) { token in
             generatedTokens.append(token)
             
-            // Stop on special tokens
-            if useHarmony {
-                if token == 200002 || // <|return|>
-                   token == 200012 || // <|call|>
-                   token == 200007 || // <|end|>
-                   token == 199999 {  // <|endoftext|>
-                    return false
-                }
-            } else if token == 199999 { // Always stop on EOS
+            // Stop on Harmony stop tokens (properly retrieved from Harmony)
+            if stopTokenSet.contains(token) {
                 return false
             }
             
@@ -182,6 +195,12 @@ struct Generate: AsyncParsableCommand {
             if outputFormat == .text && !showStats {
                 let decoded = tokenizer.decode([token])
                 print(decoded, terminator: "")
+                fflush(stdout)
+            }
+            
+            // Debug: always print token ID
+            if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {
+                print(" [token:\(token)]", terminator: "")
                 fflush(stdout)
             }
             
@@ -246,7 +265,6 @@ struct GenerateConfig {
     let repetitionPenalty: Float
     let system: String?
     let format: Generate.OutputFormat
-    let harmony: Bool
     let stats: Bool
     let verbose: Bool
 }
@@ -289,12 +307,3 @@ enum RuntimeError: LocalizedError {
     }
 }
 
-// MARK: - Main
-
-@main
-@available(macOS 10.15, *)
-struct GenerateCLI {
-    static func main() async {
-        await Generate.main()
-    }
-}

@@ -11,7 +11,7 @@ struct MetallibBuilder: BuildToolPlugin {
         
         // Find Metal shader files from gpt_oss
         let packageRoot = context.package.directoryURL
-        let metalSourceDir = packageRoot.appending(path: "gpt_oss/metal/source")
+        let metalSourceDir = packageRoot.appending(path: "../../../gpt_oss/metal/source")
         let includeDir = metalSourceDir.appending(path: "include")
         
         // Check if Metal source directory exists
@@ -79,6 +79,21 @@ struct MetallibBuilder: BuildToolPlugin {
             ],
             inputFiles: airPaths,
             outputFiles: [metallibPath]
+        ))
+        
+        // Copy metallib to Resources directory for bundling
+        let resourcesDir = packageRoot.appending(path: "Sources/NoesisEngine/Resources")
+        let resourceMetallibPath = resourcesDir.appending(path: "default.metallib")
+        
+        commands.append(.buildCommand(
+            displayName: "Copy Metal Library to Resources",
+            executable: URL(filePath: "/bin/cp"),
+            arguments: [
+                metallibPath.path,
+                resourceMetallibPath.path
+            ],
+            inputFiles: [metallibPath],
+            outputFiles: [resourceMetallibPath]
         ))
         
         return commands

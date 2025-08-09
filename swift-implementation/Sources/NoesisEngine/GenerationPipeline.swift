@@ -57,6 +57,10 @@ public final class GenerationPipeline {
             context.reset()
             // Add prompt tokens to context and track their frequencies
             context.addTokens(prompt)
+            if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {
+                print("   [dbg] Added \(prompt.count) prompt tokens to context")
+                print("   [dbg] Context state: numTokens=\(context.numTokens), numBatchTokens=\(context.numBatchTokens)")
+            }
             // Track prompt tokens for frequency/presence penalties
             for token in prompt {
                 trackToken(token)
@@ -81,10 +85,19 @@ public final class GenerationPipeline {
                     print("   [dbg] Processing batch of \(context.numBatchTokens) tokens before generation")
                 }
                 try processBatch()
+                if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {
+                    print("   [dbg] Batch processed. Ready to generate next token.")
+                }
             }
             
             // Generate next token from the processed state
+            if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {
+                print("   [dbg] Calling generateNextToken...")
+            }
             let nextToken = try generateNextToken(sampler: sampler)
+            if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {
+                print("   [dbg] Generated token: \(nextToken)")
+            }
             generatedTokens.append(nextToken)
             
             // Track the generated token for penalties
@@ -145,7 +158,7 @@ public final class GenerationPipeline {
         }
         
         let embeddingsArgs = GptossEmbeddingsArgs(
-            numVecs: model.config.embeddingDim / 4
+            numVecs: UInt32(batchSize) * model.config.embeddingDim / 8  // CRITICAL FIX: numTokens * embeddingDim / 8
         )
         
         // Calculate token offset: (context->num_tokens - context->num_batch_tokens) * sizeof(uint32_t)
@@ -162,8 +175,17 @@ public final class GenerationPipeline {
             numTokens: batchSize
         )
         
+        if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {
+            print("   [dbg] Embeddings: tokens at offset \(tokenOffsetInBytes), output to residual, \(batchSize) tokens")
+        }
+        
         // 2. Process each transformer block
         for blockIdx in 0..<Int(model.config.numBlocks) {
+            if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" && (blockIdx == 0 || blockIdx == Int(model.config.numBlocks) - 1) {
+                print("   [dbg] Processing block \(blockIdx) of \(model.config.numBlocks)")
+                print("   [dbg]   perBlockSharedWeightsSize: \(model.perBlockSharedWeightsSize)")
+                print("   [dbg]   Block weight offset: \(model.perBlockSharedWeightsSize * blockIdx)")
+            }
             try processBlock(
                 commandBuffer: commandBuffer,
                 blockIdx: blockIdx,
@@ -204,7 +226,11 @@ public final class GenerationPipeline {
         let inputOffset = Int(config.embeddingDim) * (batchSize - numOutputTokens) * MemoryLayout<Float32>.size
         
         // Get weight buffer for this block
-        guard blockIdx < model.blockWeightBuffers.count else { return }
+        guard blockIdx < model.blockWeightBuffers.count else {
+            throw NSError(domain: "GenerationPipeline", code: -3, userInfo: [
+                NSLocalizedDescriptionKey: "Missing MoE block weights for block index \(blockIdx). Model likely exported without MoE region."
+            ])
+        }
         let blockWeights = model.blockWeightBuffers[blockIdx]
         guard let sharedWeights = model.sharedWeightBuffer,
               let residual = context.residualActivationBuffer,
@@ -414,9 +440,9 @@ public final class GenerationPipeline {
         // 9. MoE MLP with SwiGLU
         let moeSwigluArgs = GptossMoeMatmulSwigluArgs(
             numColumnVecs: config.embeddingDim / 32,  // MF4 quantization
-            numRows: config.mlpDim,
+            numRows: 2 * config.mlpDim,  // CRITICAL: 2x for gate and up projections
             numActiveExperts: config.numActiveExperts,
-            weightExpertStride: UInt32(MemoryLayout<Float>.size * Int(config.mlpDim * config.embeddingDim / 8)),
+            weightExpertStride: UInt32(model.perExpertBlockWeightSize),  // CRITICAL: Use per-expert size in bytes
             outputExpertStride: config.mlpDim,
             swigluMin: -config.swigluLimit,
             swigluMax: config.swigluLimit
@@ -445,7 +471,7 @@ public final class GenerationPipeline {
             numRows: config.embeddingDim,
             numActiveExperts: config.numActiveExperts,
             inputExpertStride: config.mlpDim / 32,
-            weightExpertStride: UInt32(MemoryLayout<Float>.size * Int(config.embeddingDim * config.mlpDim / 8)),
+            weightExpertStride: UInt32(model.perExpertBlockWeightSize),  // CRITICAL: Use per-expert size in bytes
             outputExpertStride: config.embeddingDim
         )
         moeMatmulDispatcher.encodeMatmul(
@@ -501,12 +527,30 @@ public final class GenerationPipeline {
         
         let config = model.config
         
-        // After processBatch, numProcessedTokens is always 1 (from last block)
-        // The final processed token is always at offset 0 in rmsnorm_activation_buffer
-        // because the last block only processes 1 token starting from offset 0
-        // C reference: input_offset = embedding_dim * (num_batch_tokens - 1) * sizeof(float)
-        // With numBatchTokens=1 during generation, this gives offset = 0
-        let lastTokenOffset = 0
+        // CRITICAL: After batch processing, we need to read from the LAST token's position
+        // The prompt was processed as a batch, and the last token is at:
+        // offset = (numKvTokens - 1) * embeddingDim * sizeof(Float32)
+        // This is because processBatch processes ALL tokens in the batch
+        let lastTokenOffset = (context.numKvTokens - 1) * Int(config.embeddingDim) * MemoryLayout<Float32>.size
+        
+        // Debug: Check residual values before final RMSNorm
+        var needNewCommandBuffer = false
+        if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            needNewCommandBuffer = true
+            
+            let embDim = Int(config.embeddingDim)
+            print("   [dbg] Reading residual from offset \(lastTokenOffset) (numKvTokens=\(context.numKvTokens))")
+            let residualPtr = residual.contents().advanced(by: lastTokenOffset).bindMemory(to: Float32.self, capacity: embDim)
+            let residualPreview = Array(UnsafeBufferPointer(start: residualPtr, count: min(8, embDim)))
+            print("   [dbg] residual[0..7] before final RMSNorm: \(residualPreview)")
+            print("   [dbg] Final RMSNorm weight offset: \(model.rmsnormWeightOffset)")
+            print("   [dbg] Unembedding weight offset: \(model.unembeddingWeightOffset)")
+        }
+        
+        // Get new command buffer if we committed for debug
+        let finalCommandBuffer = needNewCommandBuffer ? model.commandQueue.makeCommandBuffer()! : commandBuffer
         
         // Final RMSNorm - read from the last token position
         let finalRmsnormArgs = GptossRmsnormArgs(
@@ -515,7 +559,7 @@ public final class GenerationPipeline {
             epsilon: config.rmsnormEpsilon
         )
         rmsnormDispatcher.encode(
-            commandBuffer: commandBuffer,
+            commandBuffer: finalCommandBuffer,
             args: finalRmsnormArgs,
             input: residual,
             inputOffset: lastTokenOffset,  // FIX: Read from last token position
@@ -527,7 +571,7 @@ public final class GenerationPipeline {
         )
         
         // Initialize argmax buffer to 0xFF (required for atomic_min operations)
-        if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
+        if let blitEncoder = finalCommandBuffer.makeBlitCommandEncoder() {
             let pattern = UInt8(0xFF)
             // Fill just the first uint64 that we'll use for this single token generation
             blitEncoder.fill(buffer: argmax, range: 0..<8, value: pattern)
@@ -541,7 +585,7 @@ public final class GenerationPipeline {
             numRows: config.vocabularySize
         )
         unembeddingDispatcher.encode(
-            commandBuffer: commandBuffer,
+            commandBuffer: finalCommandBuffer,
             args: unembeddingArgs,
             input: rmsnorm,
             inputOffset: 0,  // RMSNorm output starts at 0
@@ -557,8 +601,8 @@ public final class GenerationPipeline {
         // C reference logic: temperature=0 uses argmax directly, temperature>0 runs softmax
         if sampler.temperature == 0.0 {
             // Commit and wait for unembedding to complete (argmax computed there)
-            commandBuffer.commit()
-            commandBuffer.waitUntilCompleted()
+            finalCommandBuffer.commit()
+            finalCommandBuffer.waitUntilCompleted()
 
             // Optional debug: dump a few rmsnorm values and top-5 scores
             if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {
@@ -583,6 +627,12 @@ public final class GenerationPipeline {
                     }
                 }
                 print("   [dbg] top-8 logits: \(top.map { "\($0.0):\(String(format: "%.3f", $0.1))" }.joined(separator: ", "))")
+                
+                // Check specific tokens we expect
+                let parisToken = 12650  // "Paris" from Python
+                if parisToken < vocabSize {
+                    print("   [dbg] Token 12650 (Paris) logit: \(scorePtr[parisToken])")
+                }
             }
 
             // Read directly from argmax buffer like C reference
@@ -639,7 +689,7 @@ public final class GenerationPipeline {
                 temperature: sampler.temperature
             )
             softmaxDispatcher.encode(
-                commandBuffer: commandBuffer,
+                commandBuffer: finalCommandBuffer,
                 args: softmaxArgs,
                 score: scores,
                 argmax: argmax,
@@ -649,8 +699,8 @@ public final class GenerationPipeline {
             )
             
             // Commit and wait
-            commandBuffer.commit()
-            commandBuffer.waitUntilCompleted()
+            finalCommandBuffer.commit()
+            finalCommandBuffer.waitUntilCompleted()
 
             // Optional debug for temperature>0 path
             if ProcessInfo.processInfo.environment["NOESIS_DEBUG"] == "1" {

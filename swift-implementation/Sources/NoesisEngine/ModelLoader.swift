@@ -1,5 +1,6 @@
 import Foundation
 import Metal
+import Darwin
 
 // MARK: - GPT-OSS Model Loader
 
@@ -60,13 +61,24 @@ import Metal
             let prefixSize = Int(offset - alignedOffset)
             let mappingSize = ((size + prefixSize + pageSize - 1) / pageSize) * pageSize
 
+            print("   🔄 Calling mmap (this may take a moment for large files)...")
             let mapping = mmap(nil, mappingSize, PROT_READ, MAP_PRIVATE, fd, off_t(alignedOffset))
+            print("   ✅ mmap returned")
+            
             if mapping == MAP_FAILED {
-                throw LoadError.ioError(POSIXError(.init(rawValue: errno)!))
+                let error = errno
+                print("   ❌ mmap failed with errno: \(error)")
+                throw LoadError.ioError(POSIXError(.init(rawValue: error)!))
             }
             guard let base = mapping else {
                 throw LoadError.ioError(POSIXError(.init(rawValue: errno)!))
             }
+            
+            print("   🔧 Calling madvise...")
+            // Use madvise to optimize memory access like the C implementation
+            let adviseResult = madvise(base, mappingSize, MADV_SEQUENTIAL | MADV_WILLNEED)
+            print("   ✅ madvise returned: \(adviseResult)")
+            
             let advanced = base.advanced(by: prefixSize)
             return UnsafeRawPointer(advanced)
         }
@@ -80,10 +92,12 @@ import Metal
 
     @MainActor
     public static func loadModel(from url: URL, device: MTLDevice) throws -> GptossModel {
+        print("📂 Opening model file: \(url.path)")
         var reader = try FileReader(path: url.path)
         defer { reader.close() }
 
         // Read file header
+        print("📖 Reading file header...")
         let fileHeaderData = try reader.readBytes(count: GptossFileHeader.size)
         let fileHeader = try parseFileHeader(data: fileHeaderData)
         guard fileHeader.isValid else {
@@ -91,6 +105,7 @@ import Metal
         }
 
         // Read model UUID
+        print("🔍 Verifying model UUID...")
         let modelUUIDData = try reader.readBytes(count: 16)
         let modelUUID = GptossUUID(Array(modelUUIDData))
         guard modelUUID.equals(GptossUUID.gptossModelUUID) else {
@@ -98,6 +113,7 @@ import Metal
         }
 
         // Read model header
+        print("📋 Reading model header...")
         let modelHeaderData = try reader.readBytes(count: GptossModelHeader.size)
         let modelHeader = try parseModelHeader(data: modelHeaderData)
 
@@ -142,9 +158,7 @@ import Metal
         )
 
         // Create engine and model
-        guard let engine = NoesisEngine.shared else {
-            throw LoadError.insufficientMemory
-        }
+        let engine = try NoesisEngine()
 
         let model = try GptossModel(config: config, engine: engine)
         let layout = WeightLayout(config: config)
@@ -170,9 +184,29 @@ import Metal
             config: config,
             device: device
         )
+        
+        print("📊 Running sanity checks on loaded weights...")
 
         // Sanity checks: validate mapped weights sizes and basic non-zero content
         if let sharedBuf = model.sharedWeightBuffer {
+            // Layout summary to help diagnose mismatches with exporter
+            print("   ── Layout summary ──")
+            print(String(format: "   embedding:          offset=%10d size=%10d", 0, layout.embeddingWeightSize))
+            print(String(format: "   per-block shared:   offset=%10d size=%10d (× %d blocks)", layout.attnRmsnormGainOffset, layout.perBlockSharedWeightsSize, Int(model.config.numBlocks)))
+            print(String(format: "   final RMSNorm:      offset=%10d size=%10d", layout.rmsnormWeightOffset, layout.rmsnormWeightSize))
+            print(String(format: "   unembedding:        offset=%10d size=%10d", layout.unembeddingWeightOffset, layout.unembeddingWeightSize))
+            print(String(format: "   shared total (pgr): size=%10d", layout.sharedWeightsSize))
+            
+            // Ordering & alignment checks
+            if layout.rmsnormWeightOffset >= layout.unembeddingWeightOffset {
+                print("⚠️ WARNING: final RMSNorm offset (\(layout.rmsnormWeightOffset)) is not before unembedding (\(layout.unembeddingWeightOffset)). Expected RMSNorm then unembedding.")
+            }
+            if layout.rmsnormWeightOffset % 16 != 0 || layout.unembeddingWeightOffset % 16 != 0 {
+                print("⚠️ WARNING: RMSNorm/unembedding offsets are not 16-byte aligned. Offsets: RMS=\(layout.rmsnormWeightOffset), unemb=\(layout.unembeddingWeightOffset)")
+            }
+            if layout.unembeddingWeightOffset + layout.unembeddingWeightSize > sharedBuf.length {
+                print("🚨 ERROR: Unembedding region exceeds shared buffer length (offset+size=\(layout.unembeddingWeightOffset + layout.unembeddingWeightSize), shared=\(sharedBuf.length))")
+            }
             let sharedLen = sharedBuf.length
             if sharedLen < layout.sharedWeightsSize {
                 print("🚨 ERROR: Shared weights buffer smaller than expected (\(sharedLen) < \(layout.sharedWeightsSize))")
@@ -212,7 +246,56 @@ import Metal
                 print("⚠️ WARNING: Weight samples are zero (embed=\(embedSample), unembed=\(unembedSample))")
                 print("   This often indicates the model file is empty, corrupted, or mis-aligned.")
             }
+
+            // Additional sanity: sample final RMSNorm region
+            let finalRmsSample = bf16SampleSum(sharedBuf, offset: layout.rmsnormWeightOffset, bytes: min(1 << 20, layout.rmsnormWeightSize))
+            if finalRmsSample == 0 {
+                print("⚠️ WARNING: Final RMSNorm region sample is zero (offset=\(layout.rmsnormWeightOffset), size=\(layout.rmsnormWeightSize))")
+            }
+
+            // Heuristic: if RMSNorm sample is non-zero but unembedding sample is near zero, likely unembedding missing/misplaced
+            if finalRmsSample != 0 && unembedSample == 0 {
+                print("⚠️ WARNING: Final RMSNorm looks populated but unembedding sample is zero — check exporter layout and unembedding orientation.")
+            }
+            
+            // Additional layout assertion: Check if expected Python exporter layout matches Swift loader expectations
+            let expectedLayout = "embeddings → per-block shared × \(model.config.numBlocks) → final RMSNorm → unembedding → per-block MoE × \(model.config.numBlocks)"
+            print("   ── Expected Python exporter layout order ──")
+            print("   \(expectedLayout)")
+            
+            // Validate key layout assumptions
+            var layoutIssues: [String] = []
+            
+            // Check if final RMSNorm comes after all per-block weights
+            let expectedRmsnormStart = layout.attnRmsnormGainOffset + (layout.perBlockSharedWeightsSize * Int(model.config.numBlocks))
+            if layout.rmsnormWeightOffset != expectedRmsnormStart {
+                layoutIssues.append("Final RMSNorm at offset \(layout.rmsnormWeightOffset), expected \(expectedRmsnormStart)")
+            }
+            
+            // Check if unembedding comes immediately after RMSNorm
+            let expectedUnembedStart = layout.rmsnormWeightOffset + layout.rmsnormWeightSize
+            if layout.unembeddingWeightOffset != expectedUnembedStart {
+                layoutIssues.append("Unembedding at offset \(layout.unembeddingWeightOffset), expected \(expectedUnembedStart)")
+            }
+            
+            // Check if unembedding orientation matches kernel expectation ([vocab, hidden] BF16)
+            let expectedUnembedSize = Int(model.config.vocabularySize * model.config.embeddingDim) * 2  // BF16 = 2 bytes
+            if layout.unembeddingWeightSize != expectedUnembedSize {
+                layoutIssues.append("Unembedding size \(layout.unembeddingWeightSize), expected \(expectedUnembedSize) for [vocab=\(model.config.vocabularySize), hidden=\(model.config.embeddingDim)] BF16")
+            }
+            
+            if !layoutIssues.isEmpty {
+                print("⚠️ LAYOUT WARNINGS:")
+                for issue in layoutIssues {
+                    print("   • \(issue)")
+                }
+                print("   → Python exporter may need layout adjustments or transposition")
+            } else {
+                print("✅ Layout order matches expected Python exporter format")
+            }
         }
+        
+        print("✅ Model loading complete!")
 
         return model
     }
@@ -225,15 +308,28 @@ import Metal
         device: MTLDevice
     ) throws {
         let layout = WeightLayout(config: config)
+        
+        // Get file size to map everything from weightOffset to end of file
+        let fileAttributes = try FileManager.default.attributesOfItem(atPath: reader.path)
+        let fileSize = fileAttributes[.size] as! UInt64
+        let remainingSize = Int(fileSize - weightOffset)
+        
+        print("⚖️ Loading weights...")
+        print("   Weight offset: \(weightOffset)")
+        print("   File size: \(fileSize) bytes")
+        print("   Mapping size: \(remainingSize) bytes (\(remainingSize / (1024*1024)) MB)")
 
-        // Create memory-mapped shared weights buffer from the page-aligned offset
-        let sharedWeightsPtr = try reader.createMemoryMapping(
+        // Map the ENTIRE remaining file ONCE from weight offset to end (like C implementation)
+        let mappingBasePtr = try reader.createMemoryMapping(
             offset: weightOffset,
-            size: layout.sharedWeightsSize
+            size: remainingSize
         )
+        
+        print("   ✅ Single mmap completed for entire weights region")
 
+        // Create shared weights buffer from the first part of the mapping
         guard let sharedWeights = device.makeBuffer(
-            bytesNoCopy: UnsafeMutableRawPointer(mutating: sharedWeightsPtr),
+            bytesNoCopy: UnsafeMutableRawPointer(mutating: mappingBasePtr),
             length: layout.sharedWeightsSize,
             options: .storageModeShared
         ) else {
@@ -274,18 +370,30 @@ import Metal
         
         model.perExpertBlockWeightSize = layout.perExpertBlockWeightSize
 
-        // Create per-block MoE weight buffers
+        // Create per-block MoE weight buffers using the SAME mapping
         model.blockWeightBuffers = []
-        let weightsStartOffset = weightOffset + UInt64(layout.sharedWeightsSize)
         let pageSize = 16384
-        let moeBlockWeightSize = ((Int(config.numExperts) * layout.perExpertBlockWeightSize + pageSize - 1) / pageSize) * pageSize
+        let actualMoeBlockWeightSize = Int(config.numExperts) * layout.perExpertBlockWeightSize
+        let moeBlockWeightSize = ((actualMoeBlockWeightSize + pageSize - 1) / pageSize) * pageSize
+        
+        // Calculate offset from the beginning of our mapping (not from file start)
+        let moeStartOffsetInMapping = layout.sharedWeightsSize
+
+        // Validate MoE region exists in mapped file; otherwise fail fast.
+        // Use actual size (not page-aligned) for file size validation
+        let requiredTotal = moeStartOffsetInMapping + (Int(config.numBlocks) * actualMoeBlockWeightSize)
+        if requiredTotal > remainingSize {
+            print("🚨 ERROR: Model file too small for MoE region.")
+            print("    mappedWeights=\(remainingSize) bytes, required=\(requiredTotal) bytes")
+            print("    sharedWeightsSize=\(layout.sharedWeightsSize), perBlockMoE=\(moeBlockWeightSize), blocks=\(config.numBlocks)")
+            throw LoadError.corruptedData
+        }
 
         for blockIdx in 0..<Int(config.numBlocks) {
-            let blockOffset = weightsStartOffset + UInt64(blockIdx * moeBlockWeightSize)
-            let blockWeightsPtr = try reader.createMemoryMapping(
-                offset: blockOffset,
-                size: moeBlockWeightSize
-            )
+            // Calculate pointer to this block's weights within the single mapping
+            // Use actual size for file offset, but page-aligned size for buffer creation
+            let blockOffsetInMapping = moeStartOffsetInMapping + (blockIdx * actualMoeBlockWeightSize)
+            let blockWeightsPtr = mappingBasePtr.advanced(by: blockOffsetInMapping)
 
             guard let blockWeights = device.makeBuffer(
                 bytesNoCopy: UnsafeMutableRawPointer(mutating: blockWeightsPtr),
@@ -297,6 +405,8 @@ import Metal
 
             model.blockWeightBuffers.append(blockWeights)
         }
+        
+        print("   ✅ Created \(config.numBlocks) block weight buffers from single mapping")
     }
 
     private static func loadTokenizer(

@@ -13,8 +13,8 @@ struct Chat: AsyncParsableCommand {
         abstract: "Interactive chat with GPT-OSS models using Harmony format"
     )
     
-    @Argument(help: "Path to model.bin file")
-    var modelPath: String
+    @Argument(help: "Path to model.bin file (optional if config exists)")
+    var modelPath: String?
     
     @Option(name: .shortAndLong, help: "System prompt")
     var system: String = "You are ChatGPT, a large language model trained by OpenAI."
@@ -56,17 +56,33 @@ struct Chat: AsyncParsableCommand {
     }
     
     mutating func run() async throws {
+        // Load configuration
+        let config = ConfigLoader.load()
+        
+        // Resolve model path
+        guard let resolvedModelPath = ConfigLoader.resolveModelPath(modelPath) ?? modelPath else {
+            throw ValidationError.fileNotFound("No model path specified and no default model in config. Use --help for usage.")
+        }
+        
+        // Use config values as defaults if available
+        let finalSystem = system != "You are ChatGPT, a large language model trained by OpenAI." 
+            ? system 
+            : (config?.chat.systemPrompt ?? system)
+        
+        let finalStats = stats || (config?.chat.showStats ?? false)
+        let finalChannels = channels || (config?.chat.enableChannels ?? false)
+        
         // Create chat configuration
         let chatConfig = ChatConfig(
-            modelPath: modelPath,
-            system: system,
+            modelPath: resolvedModelPath,
+            system: finalSystem,
             temperature: temperature,
             maxTokens: maxTokens,
             date: date,
             knowledgeCutoff: knowledgeCutoff,
             reasoning: reasoning,
-            channels: channels,
-            stats: stats,
+            channels: finalChannels,
+            stats: finalStats,
             verbose: verbose
         )
         
@@ -206,6 +222,9 @@ final class ChatRunner {
             // Reset context for each turn
             context.reset()
             
+            // Get stop tokens from Harmony
+            let stopTokenSet = encoding.tokenizer.stopTokens()
+            
             // Generate response
             var responseTokens: [UInt32] = []
             var responseText = ""
@@ -222,14 +241,12 @@ final class ChatRunner {
                 responseTokens.append(token)
                 
                 // Handle special tokens
-                if token == 200005 { // <|channel|>
+                if token == 200005 { // <|channel|> - special handling for channels
                     // Channel marker - next content is channel name
                     currentChannel = ""
                     return true
-                } else if token == 200002 || // <|return|>
-                          token == 200012 || // <|call|>
-                          token == 200007 || // <|end|>
-                          token == 199999 {  // <|endoftext|>
+                } else if stopTokenSet.contains(token) {
+                    // Stop on Harmony stop tokens
                     return false
                 }
                 

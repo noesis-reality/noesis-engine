@@ -1,4 +1,0 @@
-module CTiktoken {
-    header "tiktoken_ffi.h"
-    export *
-}

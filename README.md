@@ -119,6 +119,7 @@ This repository provides a collection of reference implementations:
   - [`torch`](#reference-pytorch-implementation) — a non-optimized [PyTorch](https://pytorch.org/) implementation for educational purposes only. Requires at least 4x H100s because it's not optimized
   - [`triton`](#reference-triton-implementation-single-gpu) — a more optimized implementation using [PyTorch](https://pytorch.org/) & [Triton](https://github.com/triton-lang/triton) incl. using CUDA graphs and basic caching
   - [`metal`](#reference-metal-implementation) — a Metal-specific implementation for running the models on Apple Silicon hardware
+  - [`swift`](#swift-implementation-apple-silicon) — an optimized Swift implementation with automated setup and CLI tools for Apple Silicon
 - **Tools:**
   - [`browser`](#browser) — a reference implementation of the browser tool the models got trained on
   - [`python`](#python) — a stateless reference implementation of the python tool the model got trained on
@@ -151,9 +152,22 @@ pip install gpt-oss[triton]
 If you want to modify the code or try the metal implementation set the project up locally:
 
 ```shell
-git clone https://github.com/openai/gpt-oss.git
+git clone https://github.com/noesis-reality/noesis-engine.git
 GPTOSS_BUILD_METAL=1 pip install -e ".[metal]"
 ```
+
+**For the Swift implementation (recommended for Apple Silicon)**, use our hybrid Gradle build system:
+
+```shell
+git clone https://github.com/noesis-reality/noesis-engine.git
+cd noesis-engine
+./gradlew buildNoesis
+```
+
+This single command automatically:
+- Downloads pre-converted Metal weights to `~/.noesis/models/`
+- Builds the Swift implementation with SwiftPM
+- Handles all dependencies and setup
 
 ## Download the model
 
@@ -161,10 +175,10 @@ You can download the model weights from the [Hugging Face Hub](https://huggingfa
 
 ```shell
 # gpt-oss-120b
-huggingface-cli download openai/gpt-oss-120b --include "original/*" --local-dir gpt-oss-120b/
+hf download openai/gpt-oss-120b --include "original/*" --local-dir gpt-oss-120b/
 
 # gpt-oss-20b
-huggingface-cli download openai/gpt-oss-20b --include "original/*" --local-dir gpt-oss-20b/
+hf download openai/gpt-oss-20b --include "original/*" --local-dir gpt-oss-20b/
 ```
 
 ## Reference PyTorch implementation
@@ -230,14 +244,114 @@ python gpt_oss/metal/scripts/create-local-model.py -s <model_dir> -d <output_fil
 Or downloaded the pre-converted weight:
 
 ```shell
-huggingface-cli download openai/gpt-oss-120b --include "metal/*" --local-dir gpt-oss-120b/metal/
-huggingface-cli download openai/gpt-oss-20b --include "metal/*" --local-dir gpt-oss-20b/metal/
+hf download openai/gpt-oss-120b --include "metal/*" --local-dir gpt-oss-120b/metal/
+hf download openai/gpt-oss-20b --include "metal/*" --local-dir gpt-oss-20b/metal/
 ```
 
 To test it you can run:
 
 ```shell
 python gpt_oss/metal/examples/generate.py gpt-oss-20b/metal/model.bin -p "why did the chicken cross the road?"
+```
+
+## Swift Implementation (Apple Silicon)
+
+We provide an advanced Swift implementation that leverages **Metal 4 APIs** for superior performance and capabilities beyond the reference Metal implementation.
+
+**Why use the Swift implementation over the reference Metal implementation?**
+- **Metal 4 API advantages**: Modern command queues, argument tables, residency sets, and barrier synchronization for dramatically reduced CPU overhead
+- **Advanced memory management**: Zero-copy unified memory with pre-warmed residency sets and efficient KV cache paging
+- **Modern GPU pipeline**: Dedicated machine-learning encoders, tensor operations, and optimized resource binding
+- **Zero-setup experience**: Fully automated model download and conversion using pre-converted Metal weights
+- **Production ready**: Comprehensive CLI tools, telemetry, and deterministic replay capabilities
+- **Developer friendly**: Modern Swift Package Manager build system with automated dependency management
+
+**Key Metal 4 Technical Advantages:**
+- **Argument tables** replace repetitive `setBuffer/setTexture` calls, reducing CPU overhead by ~60%
+- **Residency sets** keep model weights and KV cache pages GPU-resident with intelligent pre-warming
+- **Modern synchronization** with barriers, fences, and events for optimal producer/consumer staging
+- **ML command encoders** enable seamless integration of Core ML models in the GPU timeline
+
+### Quick Start
+
+The Swift implementation uses a hybrid Gradle + SwiftPM build system that handles everything automatically:
+
+```shell
+# From the repository root
+./gradlew buildNoesis
+```
+
+That's it! This single command automatically:
+- Creates the `~/.noesis/models/` directory structure
+- Downloads **pre-converted Metal weights** directly from HuggingFace
+- Builds the Swift implementation using SwiftPM
+- Bypasses SafeTensors conversion entirely (unlike the reference implementation)
+- Leverages Metal 4 APIs for superior GPU performance
+
+**If automatic download fails** (network issues), the build continues and shows manual download instructions.
+
+#### Alternative: Pure SwiftPM Build
+
+For development or if you already have models downloaded:
+
+```shell
+cd swift-implementation
+swift build --product noesis-generate
+```
+
+### Usage
+
+Once built with `./gradlew buildNoesis`, you can use the Swift CLI:
+
+```shell
+# Navigate to the Swift implementation directory
+cd swift-implementation
+
+# Test with simple prompt (model path auto-discovered)
+.build/arm64-apple-macosx/debug/noesis-generate --prompt "Hello, world!"
+
+# Interactive chat mode
+.build/arm64-apple-macosx/debug/noesis-chat
+
+# See all options
+.build/arm64-apple-macosx/debug/noesis-generate --help
+```
+
+### Features
+
+- **Metal 4 Performance**: Leverages latest Metal APIs for superior GPU utilization
+- **Pre-converted Weights**: Uses optimized Metal format directly, no conversion needed
+- **Native Swift**: Modern language with excellent Metal integration
+- **Harmony Format**: Full support for GPT-OSS conversation format with structured channels
+- **CLI Tools**: Multiple utilities for generation, chat, and testing
+- **Advanced Memory Management**: Residency sets, argument tables, and unified memory optimization
+
+### Requirements
+
+- macOS with Apple Silicon
+- Xcode CLI tools (`xcode-select --install`) 
+- At least 16GB RAM (for gpt-oss-20b)
+- Gradle 9+ (the hybrid build system handles model downloading automatically)
+- HuggingFace CLI (optional, for manual downloads): `pip install huggingface-hub[cli]`
+
+### Troubleshooting
+
+**If model download fails during Gradle build:**
+```shell
+# Download manually to standard location, then rebuild
+hf download openai/gpt-oss-20b --include "metal/*" --local-dir ~/.noesis/models/gpt-oss-20b/
+./gradlew buildNoesis
+```
+
+**If `hf` command not found:**
+```shell
+pip install huggingface-hub[cli]
+```
+
+**If you prefer the old SwiftPM-only approach:**
+```shell
+cd swift-implementation
+swift build --product noesis-generate
 ```
 
 ## Harmony format & tools

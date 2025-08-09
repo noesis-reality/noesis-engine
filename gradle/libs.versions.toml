@@ -1,0 +1,18 @@
+[versions]
+kotlin = "2.2.0"
+clikt = "4.2.2"
+coroutines = "1.8.0"
+serialization = "1.6.3"
+flatbuffers-fork = "main-SNAPSHOT"
+
+[libraries]
+clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
+coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+flatbuffers-kotlin = { module = "com.github.ariawisp.flatbuffers:flatbuffers-kotlin", version.ref = "flatbuffers-fork" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

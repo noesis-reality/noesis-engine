@@ -26,10 +26,6 @@ let package = Package(
             name: "noesis-generate", 
             targets: ["NoesisGenerate"]
         ),
-        .executable(
-            name: "noesis-export",
-            targets: ["NoesisExport"]
-        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
@@ -41,15 +37,15 @@ let package = Package(
             name: "CHarmony",
             path: "Sources/CHarmony"
         ),
-        .systemLibrary(
-            name: "CTiktoken",
-            path: "Sources/CTiktoken"
-        ),
         .target(
             name: "Harmony",
             dependencies: ["CHarmony"],
             linkerSettings: [
-                .unsafeFlags(["-L", "Sources/CHarmony"]),
+                .unsafeFlags([
+                    "-L", "Sources/CHarmony",
+                    "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Sources/CHarmony",
+                    "-Xlinker", "-rpath", "-Xlinker", "@loader_path/../Sources/CHarmony"
+                ]),
                 .linkedLibrary("openai_harmony")
             ]
         ),
@@ -57,34 +53,26 @@ let package = Package(
             name: "NoesisEngine",
             dependencies: [],
             resources: [
-                // Fallback: individual shaders for development/debugging
-                .copy("../../../gpt_oss/metal/source/accumulate.metal"),
-                .copy("../../../gpt_oss/metal/source/convert.metal"),
-                .copy("../../../gpt_oss/metal/source/embeddings.metal"),
-                .copy("../../../gpt_oss/metal/source/matmul.metal"),
-                .copy("../../../gpt_oss/metal/source/moematmul.metal"),
-                .copy("../../../gpt_oss/metal/source/random.metal"),
-                .copy("../../../gpt_oss/metal/source/rmsnorm.metal"),
-                .copy("../../../gpt_oss/metal/source/rope.metal"),
-                .copy("../../../gpt_oss/metal/source/sample.metal"),
-                .copy("../../../gpt_oss/metal/source/sdpa.metal"),
-                .copy("../../../gpt_oss/metal/source/topk.metal"),
-                .copy("../../../gpt_oss/metal/source/include")
-            ],
-            plugins: ["MetallibBuilder"]
+                .process("Resources")
+            ]
         ),
         .target(
             name: "NoesisTools",
             dependencies: [
-                "Harmony",
-                "CTiktoken"
+                "Harmony"
             ],
             resources: [
                 .copy("README.md")
+            ]
+        ),
+        .target(
+            name: "NoesisBridge",
+            dependencies: [
+                "NoesisEngine",
+                "NoesisTools"
             ],
             linkerSettings: [
-                .unsafeFlags(["-L", "Sources/CTiktoken"]),
-                .linkedLibrary("tiktoken")
+                .linkedFramework("JavaVM", .when(platforms: [.macOS]))
             ]
         ),
         .executableTarget(
@@ -102,25 +90,6 @@ let package = Package(
                 "NoesisTools",
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ]
-        ),
-        .executableTarget(
-            name: "NoesisExport",
-            dependencies: [
-                "NoesisTools",
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
-            ]
-        ),
-        
-        // Build plugins
-        .plugin(
-            name: "MetallibBuilder",
-            capability: .buildTool(),
-            dependencies: []
-        ),
-        .plugin(
-            name: "RustDependencyBuilder",
-            capability: .buildTool(),
-            dependencies: []
         ),
     ]
 )

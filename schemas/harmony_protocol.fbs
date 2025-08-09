@@ -1,0 +1,112 @@
+// Harmony Encoding Protocol - FlatBuffers Schema  
+// Optimized for high-performance tokenization and structured reasoning
+// Copyright (c) 2025 Noesis Reality LLC
+
+namespace harmony.protocol;
+
+// Harmony encoding request from Kotlin to Rust
+table HarmonyRequest {
+    id: string;                          // Request correlation ID
+    
+    // Request type union
+    encode_request: EncodeRequest;
+    decode_request: DecodeRequest;
+    prompt_request: PromptRequest;
+    reasoning_request: ReasoningRequest;
+}
+
+// Plain text encoding
+table EncodeRequest {
+    text: string;                        // Raw text to encode
+    format_type: byte = 0;               // 0=plain, 1=structured, 2=reasoning
+}
+
+// Token decoding  
+table DecodeRequest {
+    tokens: [uint32];                    // Token IDs to decode
+    include_metadata: bool = false;      // Include token metadata
+}
+
+// Structured prompt rendering
+table PromptRequest {
+    system_message: string;
+    user_message: string;
+    assistant_prefix: string;
+    
+    // Template parameters
+    template_name: string;
+    context_length: uint32 = 8192;
+    reasoning_enabled: bool = false;
+}
+
+// Advanced reasoning context
+table ReasoningRequest {
+    task: string;
+    context: string;
+    reasoning_level: byte = 1;           // 0=low, 1=medium, 2=high
+    
+    // Reasoning parameters
+    max_steps: uint32 = 10;
+    step_timeout_ms: uint32 = 5000;
+    include_thinking: bool = true;
+}
+
+// Harmony encoding response
+table HarmonyResponse {
+    id: string;                          // Correlates to request ID
+    
+    // Response data
+    tokens: [uint32];                    // Encoded tokens
+    text: string;                        // Decoded/formatted text
+    
+    // Harmony-specific metadata
+    token_metadata: [TokenMetadata];     // Per-token information
+    reasoning_context: ReasoningContext; // Structured reasoning data
+    
+    // Performance metrics
+    encoding_time_ms: uint32;
+    token_count: uint32;
+    
+    error: string;                       // Error message if failed
+}
+
+// Per-token metadata (for advanced processing)
+table TokenMetadata {
+    token_id: uint32;
+    token_text: string;
+    token_type: byte;                    // 0=text, 1=control, 2=reasoning, 3=special
+    confidence: float;
+    position: uint32;
+}
+
+// Reasoning context data
+table ReasoningContext {
+    task_summary: string;
+    reasoning_steps: [HarmonyReasoningStep];
+    context_tokens: [uint32];
+    
+    // Reasoning metadata
+    total_thinking_time_ms: uint32;
+    confidence_score: float;
+    reasoning_depth: byte;
+}
+
+// Harmony-specific reasoning step
+table HarmonyReasoningStep {
+    step_id: uint32;
+    step_type: string;                   // "analysis", "synthesis", "verification"
+    content: string;
+    
+    // Step metadata
+    token_range_start: uint32;
+    token_range_end: uint32;
+    processing_time_ms: uint32;
+    confidence: float;
+    
+    // Structured data
+    premises: [string];
+    conclusions: [string];
+    evidence: [string];
+}
+
+root_type HarmonyResponse;

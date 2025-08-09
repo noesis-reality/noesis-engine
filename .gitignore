@@ -38,3 +38,40 @@ dist/
 venv/
 env/
 .pytest_cache/
+
+.gradle
+.idea
+.kotlin
+build
+**/.claude/settings.local.json
+env.properties
+.qodana/code-coverage
+local.properties
+/kotlin-js-store/yarn.lock
+
+# Rust/Cargo build artifacts
+**/target/
+**/Cargo.lock
+**/*.rs.bk
+
+# JNI/Native library build artifacts
+**/*.dylib
+**/*.so
+**/*.dll
+**/*.jnilib
+**/*.metallib
+
+# Test output files
+**/*.class
+**/hs_err_pid*
+
+# Local configuration (user-specific paths)
+local.properties
+gradle.local.properties
+noesis.properties
+
+# macOS
+.DS_Store
+
+# IDE
+*.iml
